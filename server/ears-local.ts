@@ -25,7 +25,7 @@ import type { Ears, EarsCallbacks } from './ears.ts';
 
 const URL_ = process.env['WHISPER_URL'] ?? 'http://127.0.0.1:8178/inference';
 const LANGUAGE = process.env['DUCK_LANG'] ?? 'auto';
-const SILENCE_MS = Number(process.env['SILENCE_MS'] ?? 800);
+const SILENCE_MS = Number(process.env['SILENCE_MS'] ?? 1000); // quiet speech dips between words; 800 cut sentences
 const JOIN_MS = Number(process.env['JOIN_MS'] ?? 1500); // a final this soon after the last one continues it
 const PARTIALS = process.env['DUCK_PARTIALS'] === '1';
 const PARTIAL_EVERY_MS = 1200;
@@ -124,7 +124,8 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
 
   function frame(f: Buffer): void {
     const level = rms(f);
-    const loud = level > Math.max(noise * 3, 300);
+    // the DJI stream is quiet: speech peaks around 300-600 RMS over a floor of 1-6
+    const loud = level > Math.max(noise * 5, 40);
     // the floor follows quiet frames quickly and loud ones barely, so speech does not raise it
     noise = loud ? noise * 0.999 + level * 0.001 : noise * 0.95 + level * 0.05;
     if (!speaking) {
