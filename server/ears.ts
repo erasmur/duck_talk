@@ -42,6 +42,8 @@ import { terms, type Correction } from './corrections.ts';
 export interface Ears {
   send(pcm: Buffer): void;
   close(): void;
+  /** Forget the utterance before: whatever comes next starts fresh rather than joining it. */
+  cut(): void;
 }
 
 export interface EarsCallbacks {
@@ -275,6 +277,10 @@ export async function openEars(
       }
       session?.close();
       session = null;
+    },
+    cut() {
+      prefix = '';
+      finalAt = 0;
     },
   };
 }

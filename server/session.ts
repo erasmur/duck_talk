@@ -95,6 +95,15 @@ const QUIET_MS = Number(process.env['TURN_QUIET_MS'] ?? 300_000);
 // tens of milliseconds a capture buffer takes, well short of anything worth missing.
 const AUDIO_GAP_MS = 2_000;
 
+// After a push-to-talk release: how long to wait for the final of an utterance still being
+// transcribed (whisper-server takes seconds), and for a sign of one when none was seen yet.
+const PTT_FINAL_MS = 8_000;
+const PTT_GRACE_MS = process.env['DUCK_BACKEND'] === 'local' ? 1_500 : 700;
+
+function joinText(a: string, b: string): string {
+  return a && b ? `${a} ${b}` : a || b;
+}
+
 export class Session {
   /** Null until the phone sends its first microphone buffer — see `listen`. */
   private ears: Ears | null = null;
@@ -117,6 +126,16 @@ export class Session {
   private gap: ReturnType<typeof setTimeout> | null = null;
 
   private corrections: Correction[] = [];
+
+  // Push to talk, once the client sends a `ptt` frame: the button, not a pause, ends an
+  // instruction, and pressing it is the barge-in. Finals collect while it is held and go
+  // to Claude as one instruction on release. `pttHead` is the finished utterances,
+  // `pttLast` the latest final of the one being spoken (the ears' joins replace it).
+  private ptt: 'held' | 'released' | null = null;
+  private pttHead = '';
+  private pttLast = '';
+  private pttOpen = false;
+  private pttWait: ReturnType<typeof setTimeout> | null = null;
 
   // What this turn was given — pictures and pasted texts — held from the moment they
   // are picked until the turn they belong to is over. Not a field on the frame that
@@ -315,6 +334,7 @@ export class Session {
     return open({
       log: this.log,
       onPartial: (text, continuing) => {
+        if (this.ptt) return this.pttPartial(text, continuing);
         // Speech during a turn is one of two things, and the ears already know which:
         // `continuing` is their own JOIN decision, so this utterance is the rest of
         // the instruction that started the turn — take the turn back and wait for the
@@ -335,6 +355,10 @@ export class Session {
         this.phone.event({ type: 'user', text, partial: true });
       },
       onFinal: (text, clip) => {
+        if (this.ptt) {
+          if (clip) this.keep(clip);
+          return this.pttFinal(text);
+        }
         this.turn.heard = text;
         // The clip belongs to the utterance, not to the turn, so it is kept and
         // announced here — with the text it is the sound of, and before anything is
@@ -411,7 +435,7 @@ export class Session {
    * it — say "no", or hang up — so the only refusal that needs a message is the
    * spoken one, and that arrives as a transcript like any other.
    */
-  frame(msg: { type?: string; name?: string; note?: string; at?: number; ms?: number; text?: string; data?: string; id?: number; model?: string; permission?: string; effort?: string }): void {
+  frame(msg: { type?: string; name?: string; note?: string; at?: number; ms?: number; text?: string; data?: string; id?: number; model?: string; permission?: string; effort?: string; on?: boolean }): void {
     if (msg.type === 'mark' && msg.name === 'reply_in' && typeof msg.at === 'number') this.turn.reply_in_at = msg.at;
     // Only while a turn is in flight: the mark trails its final by a beat, so after a
     // final that itself ended things — a bare "no", a "stop" said to a quiet room —
@@ -458,6 +482,61 @@ export class Session {
     // phone's separate act, so stopping the work and leaving stay decoupled.
     else if (msg.type === 'stop') { this.cancel('stop frame'); this.claude.stopTasks(); }
     else if (msg.type === 'claude') this.be(msg.model, msg.permission, msg.effort);
+    else if (msg.type === 'ptt' && typeof msg.on === 'boolean') this.press(msg.on);
+  }
+
+  private press(on: boolean): void {
+    if (on) {
+      // pressed again before the last words were in: still the same instruction
+      if (this.pttWait) {
+        clearTimeout(this.pttWait);
+        this.pttWait = null;
+        this.ptt = 'held';
+        return;
+      }
+      this.ptt = 'held';
+      this.pttHead = this.pttLast = '';
+      this.pttOpen = false;
+      this.ears?.cut();
+      if (this.state === 'claude') void this.cancel('push to talk');
+      return;
+    }
+    if (this.ptt !== 'held') return;
+    this.ptt = 'released';
+    // the ears end an utterance on a pause, so the last words are still on their way; a
+    // backend that announces speech late (ears-local) gets a moment to say it heard any
+    this.pttWait = setTimeout(() => this.pttDone(), this.pttOpen ? PTT_FINAL_MS : PTT_GRACE_MS);
+  }
+
+  private pttPartial(text: string, continuing: boolean): void {
+    if (!this.pttOpen) {
+      this.pttOpen = true;
+      if (!continuing) { this.pttHead = joinText(this.pttHead, this.pttLast); this.pttLast = ''; }
+      if (this.pttWait) { clearTimeout(this.pttWait); this.pttWait = setTimeout(() => this.pttDone(), PTT_FINAL_MS); }
+    }
+    this.phone.event({ type: 'user', text: joinText(this.pttHead, text), partial: true });
+  }
+
+  private pttFinal(text: string): void {
+    if (!this.pttOpen) { this.pttHead = joinText(this.pttHead, this.pttLast); }
+    this.pttOpen = false;
+    this.pttLast = text;
+    if (this.ptt === 'released' && this.pttWait) this.pttDone();
+    else if (this.ptt === 'held') this.phone.event({ type: 'user', text: joinText(this.pttHead, this.pttLast), partial: true });
+  }
+
+  private pttDone(): void {
+    if (this.pttWait) clearTimeout(this.pttWait);
+    this.pttWait = null;
+    const said = joinText(this.pttHead, this.pttLast).trim();
+    this.pttHead = this.pttLast = '';
+    this.pttOpen = false;
+    this.ears?.cut();
+    if (!said || this.closed) return;
+    this.turn.heard = said;
+    this.turn.partial_first_at ??= Date.now();
+    this.phone.event({ type: 'user', text: said, partial: false, clip: this.turn.clip });
+    this.heard(said);
   }
 
   /**
@@ -482,6 +561,7 @@ export class Session {
     this.closed = true;
     this.disarm();
     if (this.gap) { clearTimeout(this.gap); this.gap = null; }
+    if (this.pttWait) { clearTimeout(this.pttWait); this.pttWait = null; }
     // A turn in flight outlives its socket — claude.ts keeps it working — but its
     // record dies with this object, so what is known is written now. The reply's
     // tail and the cost land after the detach, in nobody's record: a partial line

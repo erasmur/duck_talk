@@ -169,6 +169,10 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
     close() {
       closed = true;
     },
+    cut() {
+      lastFinalText = '';
+      lastFinalAt = 0;
+    },
   };
 }
 
