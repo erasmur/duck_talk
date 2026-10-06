@@ -4,7 +4,8 @@
  * Same contract as ears.ts, selected with DUCK_BACKEND=local.
  *
  * Whisper does not stream, so the two signals are made here:
- *   onPartial  at speech start ("…"), which is all a barge-in needs; with
+ *   onPartial  once BARGE_MS of speech have been heard ("…"), which is all a barge-in needs
+ *              (earlier, a cough or breath over the reply cut Claude off); with
  *              DUCK_PARTIALS=1 also the utterance so far, about once a second. Off by
  *              default: whisper-server takes one request at a time (~2.5 s each on an
  *              M-series Mac), so partials queue up in front of the final
@@ -30,6 +31,7 @@ const JOIN_MS = Number(process.env['JOIN_MS'] ?? 1500); // a final this soon aft
 const PARTIALS = process.env['DUCK_PARTIALS'] === '1';
 const PARTIAL_EVERY_MS = 1200;
 const MIN_SPEECH_MS = 350;
+const BARGE_MS = Number(process.env['BARGE_MS'] ?? 500);
 const FRAME = 320; // 20 ms at 16 kHz
 const PREROLL_FRAMES = 15; // 300 ms before the detector fired belong to the utterance
 const START_FRAMES = 3;
@@ -75,6 +77,7 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
   let continuing = false;
   let partialBusy = false;
   let lastPartialAt = 0;
+  let announced = false; // this utterance has sent its first partial
   let closed = false;
   let chain: Promise<void> = Promise.resolve(); // finals in order
 
@@ -87,7 +90,7 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
     utterance = preroll.splice(0);
     continuing = Date.now() - lastFinalAt < JOIN_MS;
     lastPartialAt = Date.now();
-    cb.onPartial(stitch('…'), continuing);
+    announced = false;
   }
 
   function partial(): void {
@@ -105,6 +108,8 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
     speaking = false;
     const audio = Buffer.concat(utterance);
     const long = speechMs >= MIN_SPEECH_MS;
+    // a short utterance never announced itself; announce it now so the final has its partial
+    if (long && !announced) cb.onPartial(stitch('…'), continuing);
     const joined = continuing;
     utterance = [];
     if (!long) return;
@@ -139,6 +144,10 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
     if (loud) {
       quietMs = 0;
       speechMs += 20;
+      if (!announced && speechMs >= BARGE_MS) {
+        announced = true;
+        cb.onPartial(stitch('…'), continuing);
+      }
     } else {
       quietMs += 20;
     }
