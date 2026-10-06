@@ -94,7 +94,7 @@ if (!API_KEY) {
 }
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({ port: PORT, host: process.env['HOST'] });
 let nextId = 1;
 
 // The chat list with the one fact only this process knows on it: which chats Claude

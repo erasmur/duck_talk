@@ -40,7 +40,7 @@ import { GoogleGenAI, type GenerateContentResponse } from '@google/genai';
 import { read } from './prompts.ts';
 
 /** Which voice Claude speaks in. Any of the prebuilt names. */
-const VOICE_NAME = 'Sulafat';
+const VOICE_NAME = process.env['VOICE_NAME'] ?? 'Sulafat';
 
 // The endpoint returns 400 and 500 on requests that succeed unchanged moments
 // later, so a sentence gets more than one chance. A dropped one is a hole in the
