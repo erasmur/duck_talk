@@ -34,7 +34,10 @@
  *   node voice.ts "Hello there. How are you?"     write reply.pcm, print timings
  */
 
-import { writeFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, type GenerateContentResponse } from '@google/genai';
 import { read } from './prompts.ts';
@@ -46,6 +49,34 @@ const VOICE_NAME = process.env['VOICE_NAME'] ?? 'Sulafat';
 // later, so a sentence gets more than one chance. A dropped one is a hole in the
 // middle of a reply — the exact symptom this file exists to have fixed — and the
 // queue is serial, so a retry costs that sentence's latency and nothing else.
+// DUCK_BACKEND=local reads with the macOS voices instead of Gemini: German sentences with
+// DUCK_VOICE_DE (default Anna), the rest with DUCK_VOICE_EN; nothing leaves the Mac.
+const LOCAL = process.env['DUCK_BACKEND'] === 'local';
+const VOICE_DE = process.env['DUCK_VOICE_DE'] ?? 'Anna';
+const VOICE_EN = process.env['DUCK_VOICE_EN'] ?? 'Samantha';
+const SAY_RATE = process.env['DUCK_SAY_RATE'] ?? '200';
+const GERMAN = /[äöüß]|\b(der|die|das|und|ist|nicht|ich|du|wir|ein|eine|mit|für|auf|ich|auch|noch|schon|dann|wenn|aber|oder|kann|wird|sind|habe|hat)\b/i;
+
+/** One sentence through `say`, as 24 kHz mono PCM like Gemini's. */
+function localSpeech(text: string, signal: AbortSignal): Promise<Buffer> {
+  const dir = mkdtempSync(join(tmpdir(), 'duck-say-'));
+  const file = join(dir, 's.wav');
+  const voice = GERMAN.test(text) ? VOICE_DE : VOICE_EN;
+  return new Promise<Buffer>((resolve, reject) => {
+    execFile('say', ['-v', voice, '-r', SAY_RATE, '-o', file, '--file-format=WAVE', '--data-format=LEI16@24000', text],
+      { signal }, (err) => {
+        try {
+          if (err) return reject(err);
+          const wavFile = readFileSync(file);
+          const at = wavFile.indexOf('data');
+          resolve(at < 0 ? Buffer.alloc(0) : wavFile.subarray(at + 8));
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      });
+  });
+}
+
 const ATTEMPTS = 3;
 const RETRY_MS = 300;
 
@@ -121,6 +152,17 @@ export function openVoice(ai: GoogleGenAI, model: string, cb: VoiceCallbacks): V
       const askedAt = Date.now();
       for (let attempt = 1; attempt <= ATTEMPTS && !signal.aborted && !closed; attempt++) {
         try {
+          if (LOCAL) {
+            const pcm = await localSpeech(text, signal);
+            if (pcm.length && !signal.aborted && !closed) {
+              spoke = true;
+              firstAt ||= Date.now();
+              sentMs += pcm.length / 48;
+              cb.onPcm(pcm);
+            }
+            failure = spoke ? null : new Error('say produced no audio');
+            break;
+          }
           const stream = await ai.models.generateContentStream({
             model,
             contents,
