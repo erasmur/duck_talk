@@ -59,6 +59,17 @@ const MODEL = process.env['CLAUDE_MODEL'];
 const DRAIN_MS = Number(process.env['TASK_DRAIN_MS'] ?? 600_000);
 const PERMISSION_MODE = (process.env['CLAUDE_PERMISSION_MODE'] ?? 'plan') as PermissionMode;
 const EFFORT = (process.env['CLAUDE_EFFORT'] as EffortLevel | undefined) ?? null;
+// DUCK_REPLY_LANG=en: every spoken answer in English, whatever language the user speaks
+const REPLY_EN = process.env['DUCK_REPLY_LANG'] === 'en';
+const ENGLISH = `
+
+## Always answer in English
+
+This overrides "Answer in the language the user speaks" and the length rules above. The user speaks German or English; understand both, but say everything in English, translating what you would have said in German.
+
+- Clear, natural, easy to follow English. Technical terms, file and function names are fine as they are.
+- Not too terse: full sentences, and enough context that the answer makes sense when only heard once. Three to six sentences is normal; a longer explanation is fine when the topic needs it.
+- Simple sentence structure over clever wording. Still plain speech: no markdown, no lists, no symbols.`;
 
 /** What a session is until something asks it to be otherwise — the environment's
  *  answer, so the phone and the turn log start from the same place the CLI does.
@@ -378,7 +389,7 @@ function openClaude(cb: ClaudeCallbacks, resume?: string): Claude {
     // Read here rather than at module load, so an edit made from the phone reaches
     // the next session. It cannot reach this one: the SDK takes the prompt when the
     // query is built, and rebuilding per turn would throw the warm session away.
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: read('claude') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: read('claude') + (REPLY_EN ? ENGLISH : '') },
     includePartialMessages: true,
     permissionMode: PERMISSION_MODE,
     // What the session may become, not what it is. `setPermissionMode` refuses to reach

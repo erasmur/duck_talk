@@ -65,6 +65,8 @@ const PICKED: Record<string, string> = Object.fromEntries(
 );
 const VOICE_DE = NEURAL ? process.env['DUCK_TTS_DE'] ?? PICKED['DUCK_TTS_DE'] ?? 'de_DE-thorsten_emotional-medium#amused@1.15' : process.env['DUCK_VOICE_DE'] ?? 'Anna';
 const VOICE_EN = NEURAL ? process.env['DUCK_TTS_EN'] ?? PICKED['DUCK_TTS_EN'] ?? 'kokoro:af_heart@1.1' : process.env['DUCK_VOICE_EN'] ?? 'Samantha';
+// replies are all English (DUCK_REPLY_LANG=en), so a German-looking word never switches the voice
+const REPLY_EN = process.env['DUCK_REPLY_LANG'] === 'en';
 const GERMAN = /[äöüß]|\b(der|die|das|und|ist|nicht|ich|du|wir|ein|eine|mit|für|auf|ich|auch|noch|schon|dann|wenn|aber|oder|kann|wird|sind|habe|hat)\b/i;
 
 /**
@@ -105,7 +107,7 @@ function request(voice: string, text: string): Promise<Buffer> {
 }
 async function localSpeech(text: string, signal: AbortSignal): Promise<Buffer> {
   saypcm();
-  const pcm = await request(GERMAN.test(text) ? VOICE_DE : VOICE_EN, text);
+  const pcm = await request(!REPLY_EN && GERMAN.test(text) ? VOICE_DE : VOICE_EN, text);
   // synthesis cannot be stopped half-way; an interrupted sentence is simply dropped
   return signal.aborted ? Buffer.alloc(0) : pcm;
 }
