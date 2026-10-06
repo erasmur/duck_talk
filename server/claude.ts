@@ -418,6 +418,7 @@ function openClaude(cb: ClaudeCallbacks, resume?: string): Claude {
     env: subprocessEnv(),
     stderr: (line: string) => { if (process.env['DEBUG']) console.debug('sdk:', line.trimEnd()); },
   };
+  if (process.env['DUCK_ADD_DIRS']) options.additionalDirectories = process.env['DUCK_ADD_DIRS'].split(':').filter(Boolean);
   if (MODEL) options.model = MODEL;
   if (resume) { options.resume = resume; log(`resuming ${resume}`); }
   else options.sessionId = sessionId;
