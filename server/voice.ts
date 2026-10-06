@@ -35,7 +35,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,8 +58,13 @@ const LOCAL = process.env['DUCK_BACKEND'] === 'local';
 const TTS_DIR = process.env['DUCK_TTS_DIR'] ?? join(homedir(), '.local/share/duckvoices');
 const TTS_PYTHON = process.env['DUCK_TTS_PYTHON'] ?? join(TTS_DIR, 'venv/bin/python');
 const NEURAL = process.env['DUCK_TTS'] !== 'say' && existsSync(TTS_PYTHON);
-const VOICE_DE = NEURAL ? process.env['DUCK_TTS_DE'] ?? 'de_DE-thorsten_emotional-medium#amused@1.15' : process.env['DUCK_VOICE_DE'] ?? 'Anna';
-const VOICE_EN = NEURAL ? process.env['DUCK_TTS_EN'] ?? 'kokoro:af_heart@1.1' : process.env['DUCK_VOICE_EN'] ?? 'Samantha';
+// what `voicepick.py` saved, under the environment's own choice
+const PICKED: Record<string, string> = Object.fromEntries(
+  (existsSync(join(TTS_DIR, 'picked.env')) ? readFileSync(join(TTS_DIR, 'picked.env'), 'utf8') : '')
+    .split('\n').map((l) => l.split('=')).filter((kv) => kv.length >= 2).map(([k, ...v]) => [k!.trim(), v.join('=').trim()]),
+);
+const VOICE_DE = NEURAL ? process.env['DUCK_TTS_DE'] ?? PICKED['DUCK_TTS_DE'] ?? 'de_DE-thorsten_emotional-medium#amused@1.15' : process.env['DUCK_VOICE_DE'] ?? 'Anna';
+const VOICE_EN = NEURAL ? process.env['DUCK_TTS_EN'] ?? PICKED['DUCK_TTS_EN'] ?? 'kokoro:af_heart@1.1' : process.env['DUCK_VOICE_EN'] ?? 'Samantha';
 const GERMAN = /[äöüß]|\b(der|die|das|und|ist|nicht|ich|du|wir|ein|eine|mit|für|auf|ich|auch|noch|schon|dann|wenn|aber|oder|kann|wird|sind|habe|hat)\b/i;
 
 /**

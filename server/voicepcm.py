@@ -55,12 +55,13 @@ def speak(voice: str, text: str) -> bytes:
     return np.clip(pcm, -32768, 32767).astype("<i2").tobytes()
 
 
-for line in sys.stdin:
-    name, _, text = line.rstrip("\n").partition("\t")
-    try:
-        pcm = speak(name, text) if text.strip() else b""
-    except Exception as e:
-        print(f"voicepcm: {name}: {e}", file=sys.stderr, flush=True)
-        pcm = b""
-    out.write(struct.pack("<I", len(pcm)) + pcm)
-    out.flush()
+if __name__ == "__main__":
+    for line in sys.stdin:
+        name, _, text = line.rstrip("\n").partition("\t")
+        try:
+            pcm = speak(name, text) if text.strip() else b""
+        except Exception as e:
+            print(f"voicepcm: {name}: {e}", file=sys.stderr, flush=True)
+            pcm = b""
+        out.write(struct.pack("<I", len(pcm)) + pcm)
+        out.flush()
