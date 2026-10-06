@@ -34,10 +34,9 @@
  *   node voice.ts "Hello there. How are you?"     write reply.pcm, print timings
  */
 
-import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, type GenerateContentResponse } from '@google/genai';
 import { read } from './prompts.ts';
@@ -50,32 +49,54 @@ const VOICE_NAME = process.env['VOICE_NAME'] ?? 'Sulafat';
 // middle of a reply — the exact symptom this file exists to have fixed — and the
 // queue is serial, so a retry costs that sentence's latency and nothing else.
 // DUCK_BACKEND=local reads with the macOS voices instead of Gemini: German sentences with
-// DUCK_VOICE_DE (default Anna), the rest with DUCK_VOICE_EN; nothing leaves the Mac.
+// DUCK_VOICE_DE (default Anna), the rest with DUCK_VOICE_EN, speed DUCK_AV_RATE (0-1, default
+// 0.52); nothing leaves the Mac. Premium voices (System Settings › Accessibility › Spoken
+// Content) are picked automatically when installed.
 const LOCAL = process.env['DUCK_BACKEND'] === 'local';
 const VOICE_DE = process.env['DUCK_VOICE_DE'] ?? 'Anna';
 const VOICE_EN = process.env['DUCK_VOICE_EN'] ?? 'Samantha';
-const SAY_RATE = process.env['DUCK_SAY_RATE'] ?? '200';
 const GERMAN = /[äöüß]|\b(der|die|das|und|ist|nicht|ich|du|wir|ein|eine|mit|für|auf|ich|auch|noch|schon|dann|wenn|aber|oder|kann|wird|sind|habe|hat)\b/i;
 
-/** One sentence through `say`, as 24 kHz mono PCM like Gemini's. */
-function localSpeech(text: string, signal: AbortSignal): Promise<Buffer> {
-  const dir = mkdtempSync(join(tmpdir(), 'duck-say-'));
-  const file = join(dir, 's.wav');
-  const voice = GERMAN.test(text) ? VOICE_DE : VOICE_EN;
-  return new Promise<Buffer>((resolve, reject) => {
-    execFile('say', ['-v', voice, '-r', SAY_RATE, '-o', file, '--file-format=WAVE', '--data-format=LEI16@24000', text],
-      { signal }, (err) => {
-        try {
-          if (err) return reject(err);
-          const wavFile = readFileSync(file);
-          const at = wavFile.indexOf('data');
-          resolve(at < 0 ? Buffer.alloc(0) : wavFile.subarray(at + 8));
-        } finally {
-          rmSync(dir, { recursive: true, force: true });
-        }
-      });
+/**
+ * Sentences through saypcm (AVSpeechSynthesizer kept loaded; `say` costs ~1.7 s of start-up
+ * per call), as 24 kHz mono PCM like Gemini's. One helper for the relay, started on first use
+ * and warmed up with both voices, so the first real sentence is not the cold one.
+ */
+let helper: ChildProcess | null = null;
+let inbox = Buffer.alloc(0);
+const waiting: ((pcm: Buffer) => void)[] = [];
+function saypcm(): ChildProcess {
+  if (helper && helper.exitCode === null) return helper;
+  inbox = Buffer.alloc(0);
+  const h = spawn(join(dirname(fileURLToPath(import.meta.url)), 'saypcm'), [], { stdio: ['pipe', 'pipe', 'inherit'] });
+  h.stdout!.on('data', (chunk: Buffer) => {
+    inbox = Buffer.concat([inbox, chunk]);
+    while (inbox.length >= 4 && inbox.length >= 4 + inbox.readUInt32LE(0)) {
+      const n = inbox.readUInt32LE(0);
+      const pcm = inbox.subarray(4, 4 + n);
+      inbox = inbox.subarray(4 + n);
+      waiting.shift()?.(pcm);
+    }
+  });
+  h.on('exit', () => { helper = null; waiting.splice(0).forEach((w) => w(Buffer.alloc(0))); });
+  helper = h;
+  for (const v of [VOICE_DE, VOICE_EN]) request(v, '.');
+  return h;
+}
+function request(voice: string, text: string): Promise<Buffer> {
+  const h = helper ?? saypcm();
+  return new Promise((resolve) => {
+    waiting.push(resolve);
+    h.stdin!.write(`${voice}\t${text.replace(/[\t\n]+/g, ' ')}\n`);
   });
 }
+async function localSpeech(text: string, signal: AbortSignal): Promise<Buffer> {
+  saypcm();
+  const pcm = await request(GERMAN.test(text) ? VOICE_DE : VOICE_EN, text);
+  // synthesis cannot be stopped half-way; an interrupted sentence is simply dropped
+  return signal.aborted ? Buffer.alloc(0) : pcm;
+}
+if (LOCAL) saypcm();
 
 const ATTEMPTS = 3;
 const RETRY_MS = 300;

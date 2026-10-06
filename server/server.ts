@@ -87,7 +87,10 @@ const PORT = Number(process.env['PORT'] ?? 8765);
 // first is a session — see voice.ts for why the reader is better off without one.
 const STT_MODEL = process.env['STT_MODEL'] ?? 'gemini-3.5-transcribe-live';
 const VOICE_MODEL = process.env['VOICE_MODEL'] ?? 'gemini-3.1-flash-tts-preview';
-const API_KEY = process.env['GEMINI_API_KEY'];
+// DUCK_BACKEND=local hears with whisper-server and speaks with the macOS voices: no Gemini key,
+// nothing sent to Google (ears-local.ts, voice.ts › LOCAL)
+const LOCAL = process.env['DUCK_BACKEND'] === 'local';
+const API_KEY = process.env['GEMINI_API_KEY'] ?? (LOCAL ? 'unused' : undefined);
 if (!API_KEY) {
   console.error('GEMINI_API_KEY missing (set it in ../.env)');
   process.exit(1);
@@ -264,7 +267,7 @@ wss.on('listening', () => {
     console.log(`  simulator    ${r.simulator}`);
     if (r.wifi) console.log(`  same Wi-Fi   ${r.wifi}`);
     console.log(`  anywhere     ${r.anywhere}`);
-    console.log(`  stt ${STT_MODEL}  ·  voice ${VOICE_MODEL}`);
+    console.log(`  stt ${LOCAL ? `whisper-server (local)` : STT_MODEL}  ·  voice ${LOCAL ? `macOS (local)` : VOICE_MODEL}`);
   });
   // Asking the CLI who it is takes a subprocess and about 700ms, so it is printed
   // when it comes back rather than kept in front of the address someone is waiting for.

@@ -74,7 +74,7 @@ for (const file of [resolve(project, '.env'), resolve(process.cwd(), '.env')]) {
 // project's state directory.
 const logFile = (await import('./log.ts')).openLog();
 
-if (!process.env['GEMINI_API_KEY']) {
+if (!process.env['GEMINI_API_KEY'] && process.env['DUCK_BACKEND'] !== 'local') {
   console.error(`duck-talk needs a Gemini key to hear you and to speak.
 
   export GEMINI_API_KEY=...        or put it in .env, in this folder

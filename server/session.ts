@@ -42,6 +42,7 @@ import { save as saveClip } from './clips.ts';
 import { correct, CORRECT_MODEL } from './correct.ts';
 import { add, load, type Correction } from './corrections.ts';
 import { openEars, keyword, type Ears, type Keyword } from './ears.ts';
+import { openEarsLocal } from './ears-local.ts';
 import { save as saveImage } from './images.ts';
 import { append, type Mode, type Turn } from './turns.ts';
 import { openVoice, type Voice } from './voice.ts';
@@ -308,7 +309,10 @@ export class Session {
    * instruction.
    */
   private openEars(): Promise<Ears> {
-    return openEars(this.ai, this.sttModel, {
+    const open = process.env['DUCK_BACKEND'] === 'local'
+      ? (cb: Parameters<typeof openEarsLocal>[0]) => openEarsLocal(cb)
+      : (cb: Parameters<typeof openEarsLocal>[0]) => openEars(this.ai, this.sttModel, cb, this.corrections);
+    return open({
       log: this.log,
       onPartial: (text, continuing) => {
         // Speech during a turn is one of two things, and the ears already know which:
@@ -353,7 +357,7 @@ export class Session {
         if (this.closed) return;
         this.ears = null;
       },
-    }, this.corrections);
+    });
   }
 
   // --- Phone → session -------------------------------------------------------
