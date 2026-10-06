@@ -42,8 +42,12 @@ import { terms, type Correction } from './corrections.ts';
 export interface Ears {
   send(pcm: Buffer): void;
   close(): void;
-  /** Forget the utterance before: whatever comes next starts fresh rather than joining it. */
-  cut(): void;
+  /** Push to talk, the button pressed: the caller decides where an instruction ends, so no
+   *  utterance is joined onto the one before. */
+  hold(): void;
+  /** The button released: resolves once everything heard since `hold` has come out as a
+   *  final, since nothing more is coming. */
+  settle(): Promise<void>;
 }
 
 export interface EarsCallbacks {
@@ -70,6 +74,9 @@ export interface EarsCallbacks {
 // a pause for thought now ends the sentence, which is what the join below repays.
 // `endOfSpeechSensitivity` is deliberately not set: alongside 200 it measured slower.
 const SILENCE_MS = 200;
+
+// How long after the microphone closes a sentence can still be starting to show up.
+const SETTLE_MS = 700;
 
 // A new utterance starting this soon after the last final continues it rather than
 // answering it. Derived, not chosen, from both ends of the window: the reply's first
@@ -151,6 +158,8 @@ export async function openEars(
   // The JOIN decision for the utterance now being spoken, held for its whole length —
   // every partial of one utterance says the same thing.
   let joined = false;
+  let joining = true;
+  let settled: (() => void) | null = null;
 
   // --- The stream as something that can be sliced --------------------------
   //
@@ -215,7 +224,7 @@ export async function openEars(
           // and held for its whole length, so a long tail cannot lose its head midway.
           if (!speaking) {
             speaking = true;
-            joined = Date.now() - finalAt <= JOIN_MS;
+            joined = joining && Date.now() - finalAt <= JOIN_MS;
             if (!joined) prefix = '';
             // A joined utterance keeps the head fragment's start, so the clip grows
             // with the text: each final's audio is the audio of the whole sentence so
@@ -245,6 +254,8 @@ export async function openEars(
           if (startMs !== null) { coveredMs += endMs - Math.max(startMs, lastEndMs); transcripts++; }
           lastEndMs = endMs;
           cb.onFinal(text, clip);
+          settled?.();
+          settled = null;
         }
       },
       onerror: (e) => log(`ears error: ${e.message}`),
@@ -278,9 +289,16 @@ export async function openEars(
       session?.close();
       session = null;
     },
-    cut() {
-      prefix = '';
-      finalAt = 0;
+    hold() {
+      joining = false;
+    },
+    settle() {
+      // a final follows the last partial within SILENCE_MS and a beat; audio still in flight
+      // when nothing was being said gets a moment to show up as a partial
+      return new Promise((resolve) => {
+        settled = resolve;
+        setTimeout(() => { if (!speaking && settled === resolve) { settled = null; resolve(); } }, SETTLE_MS);
+      });
     },
   };
 }

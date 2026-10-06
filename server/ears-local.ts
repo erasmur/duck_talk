@@ -11,6 +11,9 @@
  *              M-series Mac), so partials queue up in front of the final
  *   onFinal    after SILENCE_MS of quiet, the whole utterance transcribed once more
  *
+ * With push to talk (`hold`) none of that runs: what is said while the button is held is
+ * transcribed once on release (`settle`).
+ *
  * The detector tracks the noise floor and calls a frame speech when it stands clearly
  * above it, so a hissing wireless mic does not count as talking. Whisper invents text
  * for noise ("Untertitel im Auftrag des ZDF", "Thank you."), so very short utterances
@@ -75,6 +78,9 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
   let lastFinalAt = 0;
   let lastFinalText = '';
   let continuing = false;
+  // push to talk: everything said while the button is held, and no detector (null between presses)
+  let held: Buffer[] | null = null;
+  let ptt = false;
   let partialBusy = false;
   let lastPartialAt = 0;
   let announced = false; // this utterance has sent its first partial
@@ -159,6 +165,7 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
   return {
     send(pcm: Buffer) {
       if (closed) return;
+      if (ptt) return void held?.push(pcm);
       pending = Buffer.concat([pending, pcm]);
       const bytes = FRAME * 2;
       while (pending.length >= bytes) {
@@ -169,9 +176,25 @@ export async function openEarsLocal(cb: EarsCallbacks): Promise<Ears> {
     close() {
       closed = true;
     },
-    cut() {
-      lastFinalText = '';
-      lastFinalAt = 0;
+    hold() {
+      ptt = true;
+      held = [];
+    },
+    async settle() {
+      // the whole stretch the button was held, transcribed once: no detector to miss a quiet start
+      const audio = held ? Buffer.concat(held) : Buffer.alloc(0);
+      held = null;
+      if (audio.length >= MIN_SPEECH_MS * 32) {
+        chain = chain.then(async () => {
+          try {
+            const text = await transcribe(audio);
+            if (text && !closed) cb.onFinal(text, audio);
+          } catch (e) {
+            log(`ears-local: transcription failed: ${e}`);
+          }
+        });
+      }
+      await chain;
     },
   };
 }

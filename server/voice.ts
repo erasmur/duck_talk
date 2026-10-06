@@ -35,7 +35,8 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, type GenerateContentResponse } from '@google/genai';
@@ -48,13 +49,20 @@ const VOICE_NAME = process.env['VOICE_NAME'] ?? 'Sulafat';
 // later, so a sentence gets more than one chance. A dropped one is a hole in the
 // middle of a reply — the exact symptom this file exists to have fixed — and the
 // queue is serial, so a retry costs that sentence's latency and nothing else.
-// DUCK_BACKEND=local reads with the macOS voices instead of Gemini: German sentences with
-// DUCK_VOICE_DE (default Anna), the rest with DUCK_VOICE_EN, speed DUCK_AV_RATE (0-1, default
-// 0.52); nothing leaves the Mac. Premium voices (System Settings › Accessibility › Spoken
-// Content) are picked automatically when installed.
+// DUCK_BACKEND=local reads on the Mac instead of with Gemini, German sentences with one voice and
+// the rest with another; nothing leaves the Mac. With Piper installed (a venv with piper-tts at
+// DUCK_PIPER_PYTHON, models in DUCK_PIPER_DIR) the neural voices DUCK_PIPER_DE / DUCK_PIPER_EN,
+// speed DUCK_PIPER_SPEED; otherwise, or with DUCK_TTS=say, the macOS voices DUCK_VOICE_DE (Anna) /
+// DUCK_VOICE_EN (Samantha), speed DUCK_AV_RATE (0-1, default 0.52), Premium ones when installed.
 const LOCAL = process.env['DUCK_BACKEND'] === 'local';
-const VOICE_DE = process.env['DUCK_VOICE_DE'] ?? 'Anna';
-const VOICE_EN = process.env['DUCK_VOICE_EN'] ?? 'Samantha';
+const PIPER_DIR = process.env['DUCK_PIPER_DIR'] ?? join(homedir(), '.local/share/piper');
+const PIPER_PYTHON = process.env['DUCK_PIPER_PYTHON'] ?? join(PIPER_DIR, 'venv/bin/python');
+const PIPER_DE = process.env['DUCK_PIPER_DE'] ?? 'de_DE-thorsten-high';
+const PIPER_EN = process.env['DUCK_PIPER_EN'] ?? 'en_US-lessac-high';
+const PIPER = process.env['DUCK_TTS'] !== 'say' && existsSync(PIPER_PYTHON)
+  && existsSync(join(PIPER_DIR, `${PIPER_DE}.onnx`)) && existsSync(join(PIPER_DIR, `${PIPER_EN}.onnx`));
+const VOICE_DE = PIPER ? PIPER_DE : process.env['DUCK_VOICE_DE'] ?? 'Anna';
+const VOICE_EN = PIPER ? PIPER_EN : process.env['DUCK_VOICE_EN'] ?? 'Samantha';
 const GERMAN = /[äöüß]|\b(der|die|das|und|ist|nicht|ich|du|wir|ein|eine|mit|für|auf|ich|auch|noch|schon|dann|wenn|aber|oder|kann|wird|sind|habe|hat)\b/i;
 
 /**
@@ -68,7 +76,10 @@ const waiting: ((pcm: Buffer) => void)[] = [];
 function saypcm(): ChildProcess {
   if (helper && helper.exitCode === null) return helper;
   inbox = Buffer.alloc(0);
-  const h = spawn(join(dirname(fileURLToPath(import.meta.url)), 'saypcm'), [], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const here = dirname(fileURLToPath(import.meta.url));
+  const h = PIPER
+    ? spawn(PIPER_PYTHON, [join(here, 'piperpcm.py')], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, DUCK_PIPER_DIR: PIPER_DIR } })
+    : spawn(join(here, 'saypcm'), [], { stdio: ['pipe', 'pipe', 'inherit'] });
   h.stdout!.on('data', (chunk: Buffer) => {
     inbox = Buffer.concat([inbox, chunk]);
     while (inbox.length >= 4 && inbox.length >= 4 + inbox.readUInt32LE(0)) {
